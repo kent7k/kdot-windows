@@ -56,6 +56,28 @@ awsp dev && aws-whoami
 - **薄く**。shell 層は alias と関数だけ。ロジックは `*/bin/` の単体スクリプトに置き、どれも単独で動く。
 - **認証方式が変わっても壊れない**。IAM user + MFA から IAM Identity Center に移っても `awsp` と `tf` はそのまま。
 
+## 次にやること
+
+初版（2026-10-13）は Mac 上で shellcheck・gitleaks・`tf plan` のパーサ確認までしか通していない。
+**Windows 実機と WSL では一度も流していない。** 業務機で次の順に通し、落ちたところを issue にする。
+
+1. **Windows 側を通す。** `windows/bootstrap.ps1` を一般ユーザーで実行する。
+   特に見る所: WSL の検出（`wsl --status` の終了コード）と、proxy 環境での scoop の設定。
+2. **proxy の方式を確かめる。** `bash wsl/fix/proxy-env.sh` が何も出さず、職場が PAC ファイル方式なら、
+   PAC から proxy を引く処理を足す（今はレジストリの固定 proxy しか読めない）。
+3. **WSL 側を通す。** `wsl/bootstrap.sh` → `exec bash`。mise install と session-manager-plugin の取得が
+   proxy 越しに通るかを見る。
+4. **AWS の認証を通す。** `aws/config.example` の形で `~/.aws/config` を書き、`awsp dev && aws-whoami`。
+   assume-role 先の profile でも 1 回通す。
+5. **既存の Terraform リポにガードを入れる。** 各ディレクトリに `.tf-account` を 1 枚置き、
+   `tf plan` と（dev で）`tf apply` のアカウント照合が効くか確かめる。
+6. **Claude plugin を読ませる。** `claude --plugin-dir ~/kdot-windows/claude` で `/tf-plan-review` に実際の plan を渡す。
+
+### その後の候補
+
+- IAM Identity Center（SSO）へ移行できたら、`aws/config.example` の SSO 例を正にして `aws-mfa` は互換用に残す。
+- CI（GitHub Actions）で shellcheck と PowerShell の PSScriptAnalyzer を回す。
+
 ## 開発
 
 ```sh
