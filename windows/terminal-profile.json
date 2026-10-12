@@ -1,0 +1,10 @@
+{
+  "//": "Windows Terminal の settings.json → profiles.list に足す断片。guid は wsl --list で出る distro のものに差し替える",
+  "name": "WSL (Ubuntu)",
+  "source": "Windows.Terminal.Wsl",
+  "startingDirectory": "~",
+  "commandline": "wsl.exe -d Ubuntu --cd ~",
+  "font": { "face": "Cascadia Mono", "size": 11 },
+  "colorScheme": "One Half Dark",
+  "bellStyle": "none"
+}

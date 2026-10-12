@@ -1,0 +1,18 @@
+# %USERPROFILE%\.wslconfig — WSL2 全体の設定
+# 変更後は  wsl --shutdown  で反映
+[wsl2]
+# 業務機は 16GB 想定。必要なら上げる
+memory=8GB
+processors=4
+swap=2GB
+
+# VPN と DNS の相性問題を根本から避ける（Windows 11 22H2+）。
+# 古い Windows だと起動時に警告が出て無視されるだけなので残してよい。
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
+
+# メモリをホストに返す
+[experimental]
+autoMemoryReclaim=gradual
+sparseVhd=true

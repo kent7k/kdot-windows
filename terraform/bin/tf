@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# terraform のガード付きラッパ。素の terraform と同じ引数で使う。
+#
+#   tf plan / tf apply / tf destroy / tf <anything>
+#
+# ガード
+#   1. apply / destroy / import / state 系の前に、今の認証先アカウントと
+#      そのディレクトリが想定するアカウントが一致するか確かめる。不一致なら止める。
+#      想定アカウントの取り方（上から順）
+#        a. provider "aws" の allowed_account_ids = ["..."]
+#        b. そのディレクトリの .tf-account ファイル（1 行、アカウント ID）
+#        c. どちらも無ければ警告だけ出して続行（TF_GUARD_STRICT=1 なら止める）
+#   2. plan の出力に destroy / replace があれば末尾に赤く列挙する
+#   3. destroy は workspace とアカウントを大きく表示して 3 秒待つ
+#
+# 素の terraform を呼びたい時は  command terraform ...
+set -uo pipefail
+
+red()    { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
+yellow() { printf '\033[1;33m%s\033[0m\n' "$*" >&2; }
+dim()    { printf '\033[2m%s\033[0m\n' "$*" >&2; }
+
+sub="${1:-}"
+mutating=0
+case "$sub" in apply|destroy|import|taint|untaint|state) mutating=1 ;; esac
+case "$sub" in state) case "${2:-}" in list|show|pull) mutating=0 ;; esac ;; esac
+
+expected_account() {
+  local a
+  a="$(grep -hoE 'allowed_account_ids[[:space:]]*=[[:space:]]*\[[^]]*\]' ./*.tf 2>/dev/null | grep -oE '[0-9]{12}' | head -1 || true)"
+  [ -n "$a" ] && { printf '%s' "$a"; return; }
+  [ -f .tf-account ] && { tr -d '[:space:]' < .tf-account; return; }
+  return 1
+}
+
+if [ "$mutating" = 1 ]; then
+  actual="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
+  [ -n "$actual" ] || { red "AWS の認証が通っていない（AWS_PROFILE=${AWS_PROFILE:-unset}）"; exit 1; }
+  if want="$(expected_account)"; then
+    if [ "$want" != "$actual" ]; then
+      red "アカウント不一致: このディレクトリは $want を想定、今の認証先は $actual（AWS_PROFILE=${AWS_PROFILE:-unset}）"
+      exit 1
+    fi
+    dim "account ok: $actual (${AWS_PROFILE:-no profile})"
+  else
+    yellow "想定アカウントが宣言されていない（allowed_account_ids か .tf-account）。今の認証先: $actual"
+    [ "${TF_GUARD_STRICT:-0}" = 1 ] && exit 1
+  fi
+fi
+
+if [ "$sub" = destroy ]; then
+  ws="$(command terraform workspace show 2>/dev/null || echo default)"
+  red "=============================================="
+  red "  terraform DESTROY"
+  red "  dir:       $PWD"
+  red "  workspace: $ws"
+  red "  account:   ${actual:-?}  profile: ${AWS_PROFILE:-unset}"
+  red "=============================================="
+  sleep 3
+fi
+
+if [ "$sub" = plan ]; then
+  out="$(mktemp)"; trap 'rm -f "$out"' EXIT
+  command terraform "$@" 2>&1 | tee "$out"
+  rc=${PIPESTATUS[0]}
+  plain="$(sed 's/\x1b\[[0-9;]*m//g' "$out")"
+  destroyed="$(grep -E '^[[:space:]]*# .* will be destroyed' <<<"$plain" | sed -E 's/^[[:space:]]*# (.*) will be destroyed.*/  - \1/' || true)"
+  replaced="$(grep -E '^[[:space:]]*# .* must be replaced' <<<"$plain" | sed -E 's/^[[:space:]]*# (.*) must be replaced.*/  - \1/' || true)"
+  if [ -n "$destroyed$replaced" ]; then
+    echo >&2
+    [ -n "$destroyed" ] && { red "破壊されるリソース:"; red "$destroyed"; }
+    [ -n "$replaced" ]  && { red "作り直されるリソース（destroy → create）:"; red "$replaced"; }
+  fi
+  exit "$rc"
+fi
+
+exec command terraform "$@"

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# ~/.aws/config の profile を fzf で選んで名前を出す。shell 層の awsp が export する。
+set -euo pipefail
+command -v fzf >/dev/null || { echo "fzf が無い" >&2; exit 1; }
+
+aws configure list-profiles 2>/dev/null \
+  | grep -v -- '-keys$' \
+  | fzf --height=40% --reverse --prompt='AWS profile> ' \
+        --preview 'aws configure list --profile {} 2>/dev/null; echo; grep -A8 "^\[profile {}\]" ~/.aws/config 2>/dev/null' \
+        --preview-window=right:55%

@@ -1,0 +1,35 @@
+# ~/.aws/config の書き方（IAM ユーザー + MFA → assume-role）。
+# アカウント ID・ロール名はダミー。実物はこのリポに書かない。
+#
+# ~/.aws/credentials には長期キーだけを [xxx-keys] で置く:
+#   [dev-keys]
+#   aws_access_key_id     = AKIA...
+#   aws_secret_access_key = ...
+
+[default]
+region = ap-northeast-1
+output = json
+
+# MFA セッションそのもの（キーを持つアカウントで作業する時）
+[profile dev]
+credential_process = aws-mfa --source dev-keys --mfa arn:aws:iam::111111111111:mfa/your-name
+region = ap-northeast-1
+
+# 別アカウントのロールへ（名前に prod を含めるとプロンプトが赤くなる）
+[profile prod-readonly]
+credential_process = aws-mfa --source dev-keys --mfa arn:aws:iam::111111111111:mfa/your-name --role arn:aws:iam::222222222222:role/ReadOnly
+region = ap-northeast-1
+
+[profile prod-admin]
+credential_process = aws-mfa --source dev-keys --mfa arn:aws:iam::111111111111:mfa/your-name --role arn:aws:iam::222222222222:role/Admin
+region = ap-northeast-1
+
+# 将来 IAM Identity Center に移っても awsp / プロンプトはそのまま使える
+# [profile sso-dev]
+# sso_session = org
+# sso_account_id = 333333333333
+# sso_role_name = PowerUser
+# region = ap-northeast-1
+# [sso-session org]
+# sso_start_url = https://example.awsapps.com/start
+# sso_region = ap-northeast-1

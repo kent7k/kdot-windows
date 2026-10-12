@@ -1,0 +1,16 @@
+# <リポ名>（Terraform / AWS）
+
+## 構成
+- `infra/<env>/` ごとに state を分ける。backend は S3。
+- `terraform` は直接叩かず `tf`（kdot-windows の terraform/bin/tf）を使う。
+- バージョンは各ディレクトリの `.terraform-version`（mise が読む）。
+
+## 作業の約束
+- `tf plan` → 出力を `/tf-plan-review` でレビュー → 人が `tf apply`。Claude は apply しない。
+- 変更系の aws cli（`create-*` `update-*` `delete-*` `put-*` `start-*` `stop-*`）は提示に留め、実行しない。
+- アカウント ID・ARN・内部ホスト名をコミットに含めない。`gitleaks` が pre-commit で走る。
+- 障害対応は `/aws-triage` の形式で事実→仮説→次の 1 手。
+
+## 環境
+- dev: profile `dev`
+- prod: profile `prod-*`（プロンプトが赤くなる。apply は 2 人目の確認後）

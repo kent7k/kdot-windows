@@ -1,0 +1,8 @@
+# scoop で入れるもの（ユーザースコープ、管理者不要）
+# 1 行 1 パッケージ。# はコメント。
+git
+7zip
+windows-terminal
+vscode
+# AWS の MFA コードを 1Password で管理するなら
+# 1password-cli

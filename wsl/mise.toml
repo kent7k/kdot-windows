@@ -1,0 +1,16 @@
+# ~/.config/mise/config.toml に置く（グローバル既定）。
+# リポごとの固定は各リポの .terraform-version / .mise.toml が勝つ。
+[tools]
+terraform = "latest"
+tflint = "latest"
+trivy = "latest"
+terraform-docs = "latest"
+awscli = "latest"
+pre-commit = "latest"
+node = "lts"
+gitleaks = "latest"
+
+[settings]
+# .terraform-version（tfenv 互換）を読む
+idiomatic_version_file_enable_tools = ["terraform", "node"]
+experimental = true

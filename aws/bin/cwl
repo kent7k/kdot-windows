@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# CloudWatch Logs の薄いラッパ。
+#
+#   cwl groups [prefix]                     ロググループ一覧（fzf があれば選べる）
+#   cwl tail <group> [--since 10m] [pattern] 追いかける（pattern は filter-pattern）
+#   cwl grep <group> <pattern> [--since 1h]  期間を検索して出す（追いかけない）
+#   cwl streams <group>                      最近のストリーム
+set -euo pipefail
+usage() { sed -n '2,9p' "$0"; exit 2; }
+[ $# -ge 1 ] || usage
+
+pick_group() {
+  local list
+  list="$(aws logs describe-log-groups ${1:+--log-group-name-prefix "$1"} \
+            --query 'logGroups[].logGroupName' --output text | tr '\t' '\n')"
+  if [ -t 1 ] && command -v fzf >/dev/null; then fzf --prompt='log group> ' <<<"$list"; else printf '%s\n' "$list"; fi
+}
+
+case "$1" in
+  groups)  pick_group "${2:-}" ;;
+  streams)
+    [ $# -ge 2 ] || usage
+    aws logs describe-log-streams --log-group-name "$2" --order-by LastEventTime --descending --max-items 20 \
+      --query 'logStreams[].[lastEventTimestamp,logStreamName]' --output text \
+      | while read -r ts name; do printf '%s  %s\n' "$(date -d "@$((ts/1000))" '+%F %T')" "$name"; done ;;
+  tail|grep)
+    [ $# -ge 2 ] || usage
+    mode="$1"; group="$2"; shift 2
+    since="10m"; pattern=""
+    while [ $# -gt 0 ]; do
+      case "$1" in --since) since="$2"; shift 2 ;; *) pattern="$1"; shift ;; esac
+    done
+    [ "$mode" = grep ] && { [ -n "$pattern" ] || usage; since="${since/10m/1h}"; }
+    args=(--since "$since" --format short)
+    [ "$mode" = tail ] && args+=(--follow)
+    [ -n "$pattern" ] && args+=(--filter-pattern "$pattern")
+    exec aws logs tail "$group" "${args[@]}" ;;
+  -h|--help|*) usage ;;
+esac

@@ -1,0 +1,6 @@
+{
+  "name": "kdot-windows",
+  "description": "AWS / Terraform 運用の Claude Code skill（plan レビュー・アラート一次切り分け）",
+  "version": "0.1.0",
+  "author": { "name": "kent7k" }
+}

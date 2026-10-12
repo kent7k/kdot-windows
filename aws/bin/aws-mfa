@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# IAM ユーザー + MFA の credential_process。
+#
+#   ~/.aws/config
+#     [profile dev]
+#     credential_process = aws-mfa --source dev-keys --mfa arn:aws:iam::111111111111:mfa/you
+#     region = ap-northeast-1
+#
+#     [profile prod-admin]
+#     credential_process = aws-mfa --source dev-keys --mfa arn:aws:iam::111111111111:mfa/you --role arn:aws:iam::222222222222:role/Admin
+#
+#   ~/.aws/credentials
+#     [dev-keys]            ← 長期キー。profile 名は -keys で終える（aws-profile の一覧から隠れる）
+#     aws_access_key_id = ...
+#     aws_secret_access_key = ...
+#
+# 動き
+#   - TOTP は 12 時間に 1 回だけ聞く（get-session-token をキャッシュ）
+#   - --role があれば、そのセッションから assume-role して 1 時間キャッシュ
+#   - TOTP は /dev/tty から読む。AWS_MFA_TOTP_CMD があればそれを実行して取る
+#     例: export AWS_MFA_TOTP_CMD='op item get "AWS" --otp'
+#   - キャッシュは ~/.cache/aws-mfa/ に 600 で置く
+#
+# 環境変数: AWS_MFA_SESSION_DURATION（既定 43200）, AWS_MFA_ROLE_DURATION（既定 3600）
+set -euo pipefail
+
+source_profile="" mfa_serial="" role_arn="" session_name="${USER:-kdot}" force=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) source_profile="$2"; shift 2 ;;
+    --mfa)    mfa_serial="$2"; shift 2 ;;
+    --role)   role_arn="$2"; shift 2 ;;
+    --session-name) session_name="$2"; shift 2 ;;
+    --force)  force=1; shift ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$source_profile" ] && [ -n "$mfa_serial" ] || { echo "--source と --mfa は必須" >&2; exit 2; }
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/aws-mfa"
+mkdir -p "$cache_dir"; chmod 700 "$cache_dir"
+key() { printf '%s' "$*" | sha256sum | cut -c1-16; }
+sess_file="$cache_dir/session-$(key "$source_profile" "$mfa_serial").json"
+role_file="$cache_dir/role-$(key "$source_profile" "$mfa_serial" "$role_arn").json"
+
+# 期限まで 5 分以上あれば有効
+valid() {
+  [ "$force" = 0 ] && [ -s "$1" ] || return 1
+  local exp now
+  exp="$(jq -r '.Expiration // empty' "$1")"; [ -n "$exp" ] || return 1
+  now="$(date -u +%s)"
+  [ "$(date -u -d "$exp" +%s)" -gt $((now + 300)) ]
+}
+
+# STS の応答 {Credentials:{...}} を credential_process 形式に
+to_cred_process() { jq -c '.Credentials | {Version:1, AccessKeyId, SecretAccessKey, SessionToken, Expiration}'; }
+
+read_totp() {
+  if [ -n "${AWS_MFA_TOTP_CMD:-}" ]; then
+    bash -c "$AWS_MFA_TOTP_CMD" | tr -d '[:space:]'
+  else
+    printf 'MFA code (%s): ' "${mfa_serial##*/}" > /dev/tty
+    local code; read -r code < /dev/tty; printf '%s' "$code"
+  fi
+}
+
+# ---- 1. MFA セッション --------------------------------------------------
+if ! valid "$sess_file"; then
+  code="$(read_totp)"
+  [[ "$code" =~ ^[0-9]{6}$ ]] || { echo "TOTP は 6 桁の数字" >&2; exit 1; }
+  AWS_PROFILE="$source_profile" aws sts get-session-token \
+    --serial-number "$mfa_serial" --token-code "$code" \
+    --duration-seconds "${AWS_MFA_SESSION_DURATION:-43200}" --output json \
+    | to_cred_process > "$sess_file.tmp"
+  mv "$sess_file.tmp" "$sess_file"; chmod 600 "$sess_file"
+fi
+
+if [ -z "$role_arn" ]; then cat "$sess_file"; exit 0; fi
+
+# ---- 2. assume-role（セッション資格情報で。TOTP は不要）------------------
+if ! valid "$role_file"; then
+  AWS_ACCESS_KEY_ID="$(jq -r .AccessKeyId "$sess_file")" \
+  AWS_SECRET_ACCESS_KEY="$(jq -r .SecretAccessKey "$sess_file")" \
+  AWS_SESSION_TOKEN="$(jq -r .SessionToken "$sess_file")" \
+  AWS_PROFILE='' \
+  aws sts assume-role --role-arn "$role_arn" --role-session-name "$session_name" \
+    --duration-seconds "${AWS_MFA_ROLE_DURATION:-3600}" --output json \
+    | to_cred_process > "$role_file.tmp"
+  mv "$role_file.tmp" "$role_file"; chmod 600 "$role_file"
+fi
+cat "$role_file"

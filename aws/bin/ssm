@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# SSM Session Manager の薄いラッパ。踏み台なしで EC2 に入る / ポートを引く。
+#
+#   ssm ls                                  SSM 管理下のインスタンス一覧（Name タグ付き）
+#   ssm <instance-id|Name>                  シェルに入る
+#   ssm fwd <instance-id|Name> <remote-port> [local-port]            そのインスタンスのポートを引く
+#   ssm fwd <instance-id|Name> <remote-host>:<remote-port> [local-port]  経由して別ホスト（RDS 等）のポートを引く
+#
+# 例: ssm fwd bastion mydb.xxxx.ap-northeast-1.rds.amazonaws.com:5432 15432
+set -euo pipefail
+
+usage() { sed -n '2,12p' "$0"; exit 2; }
+[ $# -ge 1 ] || usage
+
+resolve() {   # Name タグ → instance-id（i- で始まるならそのまま）
+  case "$1" in i-*) printf '%s' "$1"; return ;; esac
+  local id
+  id="$(aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=$1" "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].InstanceId' --output text)"
+  [ -n "$id" ] && [ "$id" != "None" ] || { echo "running な '$1' が見つからない" >&2; exit 1; }
+  if [ "$(wc -w <<<"$id")" -gt 1 ]; then
+    command -v fzf >/dev/null || { echo "複数ある: $id" >&2; exit 1; }
+    id="$(tr -s ' \t' '\n' <<<"$id" | fzf --prompt="$1> ")"
+  fi
+  printf '%s' "$id"
+}
+
+case "$1" in
+  ls)
+    aws ssm describe-instance-information \
+      --query 'InstanceInformationList[].[InstanceId,PingStatus,PlatformName]' --output text \
+      | while read -r id ping os; do
+          name="$(aws ec2 describe-instances --instance-ids "$id" \
+                   --query 'Reservations[0].Instances[0].Tags[?Key==`Name`].Value|[0]' --output text 2>/dev/null)"
+          printf '%-20s %-8s %-28s %s\n' "$id" "$ping" "${name:-}" "$os"
+        done ;;
+  fwd)
+    [ $# -ge 3 ] || usage
+    target="$(resolve "$2")"; dest="$3"; local_port="${4:-}"
+    if [[ "$dest" == *:* ]]; then
+      host="${dest%%:*}"; port="${dest##*:}"
+      echo "localhost:${local_port:-$port} -> $target -> $host:$port"
+      exec aws ssm start-session --target "$target" \
+        --document-name AWS-StartPortForwardingSessionToRemoteHost \
+        --parameters "{\"host\":[\"$host\"],\"portNumber\":[\"$port\"],\"localPortNumber\":[\"${local_port:-$port}\"]}"
+    else
+      port="$dest"
+      echo "localhost:${local_port:-$port} -> $target:$port"
+      exec aws ssm start-session --target "$target" \
+        --document-name AWS-StartPortForwardingSession \
+        --parameters "{\"portNumber\":[\"$port\"],\"localPortNumber\":[\"${local_port:-$port}\"]}"
+    fi ;;
+  -h|--help) usage ;;
+  *)
+    target="$(resolve "$1")"
+    exec aws ssm start-session --target "$target" ;;
+esac
